@@ -47,7 +47,7 @@ The system architecture was designed using Lucidchart.
 
 The architecture diagram represents the complete application flow from lecture input to AI-generated study resources.
 
-![LectureLens AI System Architecture](lecturelens-architecture.png)
+https://github.com/devasya-stack/LectureLens-AI/blob/main/SystemDesign%26Documentation/lecturelens-architecture.png.png
 
 ### Architecture Components
 
