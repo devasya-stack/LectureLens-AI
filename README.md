@@ -135,48 +135,6 @@ Create a structured revision approach based on the lecture.
                          ▼
                  PERSONAL WORKSPAC
 
+## 🏗️ System Architecture
 
-# 🏗️ System Architecture
-flowchart TD
-
-    A[Student] --> B[Streamlit UI]
-
-    B --> C{Choose Source}
-
-    C --> D[Microphone]
-    C --> E[Audio Upload]
-    C --> F[Video Upload]
-    C --> G[YouTube URL]
-
-    D --> H[Content Processing]
-    E --> H
-    F --> H
-    G --> I[Transcript Extraction]
-
-    I --> H
-
-    H --> J[Lecture Content]
-
-    J --> K[Gemini AI Study Engine]
-
-    K --> L[Structured Study Pack]
-
-    L --> M[Detailed Notes]
-    L --> N[Key Concepts]
-    L --> O[Definitions]
-    L --> P[Formulas]
-    L --> Q[Flashcards]
-    L --> R[Quiz]
-    L --> S[Exam Questions]
-    L --> T[Study Coach]
-    L --> U[Revision Plan]
-
-    M --> V[Study Workspace]
-    N --> V
-    O --> V
-    P --> V
-    Q --> V
-    R --> V
-    S --> V
-    T --> V
-    U --> V
+![LectureLens AI System Architecture](docs/lecturelens-architecture.png)
