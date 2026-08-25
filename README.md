@@ -6,6 +6,8 @@ LectureLens AI is an AI-powered personal study workspace that transforms lecture
 
 It uses Google's Gemini API to understand educational content and generate detailed notes, key concepts, definitions, formulas, flashcards, quizzes, exam questions and personalized revision guidance.
 
+Live App: https://lecture-lens-ai.streamlit.app/ Jai Hanuman Ji
+
 ## 🚀 Features
 
 - 🎙️ Record lectures directly from the browser
