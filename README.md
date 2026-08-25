@@ -141,6 +141,6 @@ The system architecture was designed using Lucidchart and shows the complete flo
 
 ### 📐 Architecture Diagram
 
-[![LectureLens AI System Architecture](https://raw.githubusercontent.com/devasya-stack/LectureLens-AI/main/docs/lecturelens-architecture.png)](https://lucid.app/lucidchart/1f4093c7-6bb3-4e32-8663-ca95a5d16263/edit?view_items=ybcoQTzyT.Bg%2Cg9bo40jZwb.Z&page=0_0&invitationId=inv_414e53dc-108e-43d1-9a12-9b487f52db6e)
+[LectureLens AI System Architecture]
 
 [🔎 Open the full Lucidchart architecture diagram](https://lucid.app/lucidchart/1f4093c7-6bb3-4e32-8663-ca95a5d16263/edit?view_items=ybcoQTzyT.Bg%2Cg9bo40jZwb.Z&page=0_0&invitationId=inv_414e53dc-108e-43d1-9a12-9b487f52db6e)
