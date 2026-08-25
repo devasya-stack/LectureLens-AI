@@ -1,4 +1,6 @@
 streamlit
 google-genai
 python-dotenv
-yt-dlp
+requests
+youtube-transcript-api
+pandas
