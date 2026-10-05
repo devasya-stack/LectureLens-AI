@@ -18,42 +18,35 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not API_KEY:
     raise RuntimeError(
-        "GEMINI_API_KEY is missing from your Streamlit secrets/environment."
+        "GEMINI_API_KEY is missing from your Streamlit secrets."
     )
 
 client = genai.Client(api_key=API_KEY)
 
 
 # ============================================================
-# MODEL CONFIGURATION
+# GEMINI MODELS
 # ============================================================
 
-# You can override these from Streamlit secrets/environment.
+# Current stable models.
 #
-# Primary:
-# GEMINI_MODEL=gemini-2.5-flash
+# Primary = fast + economical
+# Fallback = stronger general-purpose model
 #
-# Fallback:
-# GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
+# Gemini 3.5 Flash-Lite is currently recommended by Google
+# for high-throughput / cost-sensitive workloads.
 
-PRIMARY_MODEL = os.getenv(
-    "GEMINI_MODEL",
-    "gemini-2.5-flash"
-)
-
-FALLBACK_MODEL = os.getenv(
-    "GEMINI_FALLBACK_MODEL",
-    "gemini-2.5-flash-lite"
-)
+PRIMARY_MODEL = "gemini-3.5-flash-lite"
+FALLBACK_MODEL = "gemini-3.5-flash"
 
 
 # ============================================================
-# HELPERS
+# ERROR HELPERS
 # ============================================================
 
 def is_temporary_error(error):
     """
-    Detect temporary Gemini/API/network failures.
+    Detect errors where retrying may succeed.
     """
 
     message = str(error).upper()
@@ -64,9 +57,8 @@ def is_temporary_error(error):
         "500",
         "INTERNAL",
         "502",
+        "BAD GATEWAY",
         "504",
-        "429",
-        "RESOURCE_EXHAUSTED",
         "TIMEOUT",
         "TIMED OUT",
         "CONNECTION RESET",
@@ -80,35 +72,45 @@ def is_temporary_error(error):
     )
 
 
-def is_quota_error(error):
+def is_rate_limit_error(error):
     """
-    Detect errors where retrying the same request is unlikely to help.
+    Detect temporary rate-limit / resource exhaustion errors.
     """
 
     message = str(error).upper()
 
-    quota_markers = [
-        "RESOURCE_EXHAUSTED",
-        "QUOTA",
-        "RATE LIMIT",
-        "RATE_LIMIT",
-    ]
-
-    return any(
-        marker in message
-        for marker in quota_markers
+    return (
+        "429" in message
+        or "RESOURCE_EXHAUSTED" in message
+        or "RATE LIMIT" in message
+        or "RATE_LIMIT" in message
     )
 
 
-def clean_error_message(error):
+def is_model_not_found(error):
     """
-    Keep UI error messages readable.
+    Detect invalid/unavailable model errors.
+    """
+
+    message = str(error).upper()
+
+    return (
+        "404" in message
+        or "NOT_FOUND" in message
+        or "MODEL" in message
+        and "NOT AVAILABLE" in message
+    )
+
+
+def readable_error(error):
+    """
+    Prevent huge API errors from flooding the Streamlit UI.
     """
 
     message = str(error)
 
-    if len(message) > 1000:
-        message = message[:1000] + "..."
+    if len(message) > 1200:
+        message = message[:1200] + "..."
 
     return message
 
@@ -126,27 +128,23 @@ def request(
     """
     Robust Gemini request.
 
-    Strategy:
+    Pipeline:
 
-    1. Try primary model.
-    2. Retry temporary failures with exponential backoff.
-    3. If primary model remains unavailable, try fallback model.
-    4. Retry fallback model.
-    5. Return the first successful response.
+        Gemini 3.5 Flash-Lite
+                ↓
+        retry temporary errors
+                ↓
+        Gemini 3.5 Flash
+                ↓
+        retry temporary errors
+                ↓
+        clear final error
     """
 
-    models = []
-
-    # Primary model
-    if PRIMARY_MODEL:
-        models.append(PRIMARY_MODEL)
-
-    # Fallback model
-    if (
+    models = [
+        PRIMARY_MODEL,
         FALLBACK_MODEL
-        and FALLBACK_MODEL not in models
-    ):
-        models.append(FALLBACK_MODEL)
+    ]
 
     last_error = None
 
@@ -156,15 +154,23 @@ def request(
 
             try:
 
+                # --------------------------------------------
+                # Request configuration
+                # --------------------------------------------
+
                 config = {
                     "temperature": temperature
                 }
 
                 if json_mode:
 
-                    config["response_mime_type"] = (
-                        "application/json"
-                    )
+                    config[
+                        "response_mime_type"
+                    ] = "application/json"
+
+                # --------------------------------------------
+                # Gemini API call
+                # --------------------------------------------
 
                 response = client.models.generate_content(
                     model=model,
@@ -172,7 +178,12 @@ def request(
                     config=config
                 )
 
+                # --------------------------------------------
+                # Validate response
+                # --------------------------------------------
+
                 if not response:
+
                     raise RuntimeError(
                         "Gemini returned no response."
                     )
@@ -184,6 +195,7 @@ def request(
                 )
 
                 if not text:
+
                     raise RuntimeError(
                         "Gemini returned an empty response."
                     )
@@ -194,64 +206,74 @@ def request(
 
                 last_error = error
 
-                # ------------------------------------------------
-                # QUOTA / RATE LIMIT
-                # ------------------------------------------------
+                # ====================================================
+                # MODEL NOT AVAILABLE
+                # ====================================================
 
-                if is_quota_error(error):
+                if is_model_not_found(error):
 
-                    # If it is a temporary 429, retry.
-                    # Otherwise move to fallback model.
-                    message = str(error).upper()
+                    # Don't waste time retrying a model that
+                    # the API project cannot access.
+                    break
 
-                    if (
-                        "429" not in message
-                        and "RESOURCE_EXHAUSTED" not in message
-                    ):
-                        raise RuntimeError(
-                            "Gemini quota is exhausted. "
-                            "Please use a Gemini API project "
-                            "with available quota."
-                        ) from error
+                # ====================================================
+                # RATE LIMIT / TEMPORARY RESOURCE EXHAUSTION
+                # ====================================================
 
-                # ------------------------------------------------
-                # TEMPORARY ERROR
-                # ------------------------------------------------
+                if is_rate_limit_error(error):
+
+                    if attempt < retries - 1:
+
+                        wait_time = (
+                            (2 ** attempt) * 3
+                            + random.uniform(0.5, 1.5)
+                        )
+
+                        time.sleep(wait_time)
+
+                        continue
+
+                    # Current model exhausted.
+                    # Move to fallback.
+                    break
+
+                # ====================================================
+                # TEMPORARY SERVER ERROR
+                # ====================================================
 
                 if is_temporary_error(error):
 
-                    # We have exhausted retries for this model.
-                    if attempt == retries - 1:
-                        break
+                    if attempt < retries - 1:
 
-                    # Exponential backoff with jitter.
-                    #
-                    # Attempt 1: ~2-4 sec
-                    # Attempt 2: ~4-6 sec
-                    # Attempt 3: ~8-10 sec
-                    wait_time = (
-                        (2 ** attempt) * 2
-                        + random.uniform(0.5, 1.5)
-                    )
+                        # Exponential backoff.
+                        #
+                        # ~2-4 sec
+                        # ~4-6 sec
+                        # ~8-10 sec
 
-                    time.sleep(wait_time)
+                        wait_time = (
+                            (2 ** attempt) * 2
+                            + random.uniform(0.5, 1.5)
+                        )
 
-                    continue
+                        time.sleep(wait_time)
 
-                # ------------------------------------------------
-                # NON-TEMPORARY ERROR
-                # ------------------------------------------------
+                        continue
+
+                    # Retries exhausted.
+                    break
+
+                # ====================================================
+                # NON-RETRYABLE ERROR
+                # ====================================================
 
                 raise RuntimeError(
-                    f"Gemini request failed "
-                    f"using {model}: "
-                    f"{clean_error_message(error)}"
+                    f"Gemini request failed using "
+                    f"{model}: {readable_error(error)}"
                 ) from error
 
         # --------------------------------------------------------
-        # Primary model failed.
-        #
-        # Move automatically to fallback model.
+        # Move to next model.
         # --------------------------------------------------------
 
         if model_index < len(models) - 1:
@@ -259,13 +281,14 @@ def request(
             continue
 
     # ============================================================
-    # EVERYTHING FAILED
+    # ALL MODELS FAILED
     # ============================================================
 
     raise RuntimeError(
         "Gemini is temporarily unavailable. "
-        "LectureLens tried multiple retries and a fallback model. "
-        f"Last error: {clean_error_message(last_error)}"
+        "LectureLens tried the available Gemini models "
+        "with retries. "
+        f"Last error: {readable_error(last_error)}"
     ) from last_error
 
 
@@ -275,8 +298,14 @@ def request(
 
 def clean_json(text):
 
+    if not text:
+        raise RuntimeError(
+            "Gemini returned an empty response."
+        )
+
     text = text.strip()
 
+    # Remove ```json
     text = re.sub(
         r"^```json\s*",
         "",
@@ -284,6 +313,7 @@ def clean_json(text):
         flags=re.IGNORECASE
     )
 
+    # Remove ```
     text = re.sub(
         r"^```\s*",
         "",
@@ -296,11 +326,15 @@ def clean_json(text):
         text
     )
 
+    # Locate JSON object
     start = text.find("{")
     end = text.rfind("}")
 
     if start >= 0 and end >= 0:
-        text = text[start:end + 1]
+
+        text = text[
+            start:end + 1
+        ]
 
     return text.strip()
 
@@ -319,6 +353,7 @@ def parse_json(text):
 
     except json.JSONDecodeError:
 
+        # Attempt simple trailing-comma repair
         repaired = re.sub(
             r",\s*([}\]])",
             r"\1",
@@ -337,7 +372,7 @@ def parse_json(text):
 
 
 # ============================================================
-# STUDY PROMPT
+# STUDY PACK PROMPT
 # ============================================================
 
 def build_study_prompt(
@@ -350,14 +385,14 @@ You are LectureLens AI, a university-level AI study engine.
 
 The source is a {source_type}.
 
-Your task is to transform the source into a COMPLETE,
+Transform the source into a complete,
 exam-oriented personal study workspace.
 
 Use ONLY information supported by the supplied source.
 
 Do not invent facts.
 
-You may reorganize, simplify and explain concepts
+You may reorganize and simplify explanations
 for better learning while preserving technical accuracy.
 
 Return ONLY valid JSON.
@@ -368,14 +403,19 @@ Do not use code fences.
 
 Do not write anything outside the JSON object.
 
-Use exactly this structure:
+Use EXACTLY this structure:
 
 {{
     "title": "Clear lecture title",
+
     "subject": "Subject",
+
     "difficulty": "Beginner, Intermediate or Advanced",
+
     "duration_estimate": "Estimated study time",
+
     "summary": "Detailed overall summary",
+
     "tldr": "Short last-minute revision summary",
 
     "key_concepts": [
@@ -453,7 +493,7 @@ Use exactly this structure:
     ]
 }}
 
-Requirements:
+REQUIREMENTS:
 
 Create 6 to 10 detailed note sections.
 
@@ -465,21 +505,23 @@ Create 5 exam-oriented questions.
 
 Create useful definitions whenever the source contains terminology.
 
-Create formulas whenever the source contains mathematical or scientific formulas.
+Create formulas whenever the source contains mathematical
+or scientific formulas.
 
-For every formula, explain what each important variable means.
+For every formula, explain important variables.
 
 Identify high-priority exam topics.
 
 Include examples when supported by the source.
 
-Include common mistakes based on the concepts in the source.
+Include common mistakes related to the concepts.
 
 Make the study coach practical.
 
-Create a short revision plan for someone preparing for an examination.
+Create a short revision plan for examination preparation.
 
-Keep answers detailed enough to be genuinely useful for university study.
+Keep answers detailed enough to be genuinely useful
+for university study.
 
 SOURCE CONTENT:
 
@@ -488,7 +530,7 @@ SOURCE CONTENT:
 
 
 # ============================================================
-# CONTENT ANALYSIS
+# ANALYZE CONTENT
 # ============================================================
 
 def analyze_content(
